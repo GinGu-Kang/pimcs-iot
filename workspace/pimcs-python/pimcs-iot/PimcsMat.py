@@ -1,83 +1,145 @@
 from machine import UART, Pin
 import time
 
-class PimcsMat:
+#pc수리센터 wifi
+#ssid="ipti2"
+#password="pc123456789"
+#twosome wifi
+#ssid="twosome2"
+#password="twosome23uu"
+
+
+
+class pimcsMat():
     
-    def __init__(self,uartWifi,uartModbus,ssid,password,connectId,addr,port):
+    def __init__(self,uartWifi,uartLoadcell,ssid,password,connectId,addr,port,serial):
         self.uartWifi=uartWifi
-        self.uartModbus=uartModbus
+        self.uartLoadcell=uartLoadcell
         self.ssid=ssid
         self.password=password
         self.addr=addr
         self.port=port
         self.connectId=connectId
+        self.serial=serial
+        self.weight=0
+        self.temp=0
+        self.sendWeight=0
+        self.weightLimit=2
         self.run()
+
         
     def sendDataByTCP(self,sendData,Mode="TCP"):
+        command=bytes()
         command="AT+CIPMUX=1"
-        res=uartCommunication(self.uartWifi,command,1)
-        print(res)    
+        res=self.uartCommunication(self.uartWifi,command,1)
         command='AT+CIPSTART='+str(self.connectId)+',"'+Mode+'","'+self.addr+'",'+str(self.port)
-        res=uartCommunication(self.uartWifi,command,0.1)
+        res=self.uartCommunication(self.uartWifi,command,0.1)
+        command="AT+CIPSEND=0,"+str(len(sendData))
+        res=self.uartCommunication(self.uartWifi,command,0.1)
         print(res)
-        #보낼데이터 길이
-        command="AT+CIPSEND=0,"+str((len(sendData)+4))
-        res=uartCommunication(self.uartWifi,command,0.1)
-        print(res)
-        #데이터 전
         command=sendData
-        res=uartCommunication(self.uartWifi,command,0.1)
+        print(sendData)
+        res=self.uartCommunication(self.uartWifi,command,1,1)
         print(res)
         command="AT+CIPCLOSE"
-        res=uartCommunication(self.uartWifi,command,0.1)
+        res=self.uartCommunication(self.uartWifi,command,0.1)
         print(res)
         
     def apConnect(self):
         rxData=bytes()
         connectCommand=bytes()
+        eraseSize=0
+        
+        #보내기전에 와이파이 연결되어있나 확인
+        command="AT+CWJAP?"
+        eraseWord=""
+        eraseSize=len(command)
+        response=self.uartCommunication(self.uartWifi,command,2)
+        print(res[eraseSize+8:len(command)+8+len(ssid)])
+        
         
         connectCommand='AT+CWJAP="'+self.ssid+'","'+self.password+'"'
-        rxData=uartSerialRxMonitor(self.uartWifi,connectCommand,5)
+        rxData=self.uartCommunication(self.uartWifi,connectCommand,5,2)
         print(rxData)
         
-    def getModbusData:(self)
-        command="Q"
-        return uartSerialRxMonitor(self.uartModbus,command,1)
+    def getLoadcellData(self):
+        command="Q\r\n"
+        result=self.uartCommunication(self.uartLoadcell,command).decode('utf-8')
+        
+        if len(result)==9:
+            return int(result[1:6])
+        else:
+            return getLoadcellData()
+
     
-    def uartCommunication(self,uart,command,sleepTime):
-        command+='\r\n'
+    def chDataForm(self,weight):
+        weight="00050"        
+        header="CH"
+        if weight[0]=='-':
+            header="ER"
+            result=header+','+self.serial+','+weight
+        else:
+            result=header+','+self.serial+','+weight
+        return result
+        
+        
+    #10분에 한번 보내는 
+    def inDataForm(self,weight):
+        weight="00050"
+        header="IN"
+        if weight[0]=='-':
+            header="ER"
+            result=header+','+self.serial+','+weight
+        else:
+            result=header+','+self.serial+','+weight
+        return result
+        
+    
+    #wirtemode 0, sendmode=1, wificonnectmode=2
+    #mode 쓰지말고 decode전 데이터만 보내서 가져온 함수에서 가공하기
+    #command 뒤에도 \r\n알아서 붙히기
+    def uartCommunication(self,uart,command,sleepTime)
+        recv=bytes()
         uart.write(command)
         time.sleep(sleepTime)
-        recv=bytes()
+    
         while uart.any()>0:
             recv+=uart.read(1)
-        res=recv.decode('utf-8')
-        erase_len=len(command)
-        res = res[erase_len:]
-        return res
+        return recv
+    
     
     def run(self):
         self.apConnect()
-        while True:
-            weight=getModbusData()
-            sendData=""
+        
+        '''while True:
+            weight=self.getLoadcellData()
             print(weight)
-            #보낸데이터(sendData)와 현재 데이터가 2g이상 차이나면 임시저장소에 저장하고 3초기다림
-            #현재 데이터와 임시 저장소의 데이터가 같으면 전송 다르면 임시 저장소에 현재 데이터를 집어 넣고 보낸데이터(sendData)와 비교하고 2g이상 차이안나면 데이터 전송 X
-            #2g이상 차이나면 다시 3초 기다림 이후 현재데이터와 임시 데이터가 같으면 전송 아니면 다시 반복
-            if ""=="":
-                sendDataByTCP(sendData):
-                    
+            #양수만 전송
+            if weight>0:
+                #보낸 데이터와 현재 무게가 2g이상 차이나면 검사
+                if abs(self.sendWeight-weight)>weightLimit:
+                    #무게값이 안정되기 위한 여유 시간
+                    time.sleep(3)
+                    #검사한 무게값과 현재 무게값이 같으면 데이터가 안정되었다고 판별
+                    if abs(weight-self.getLoadcellData())<=2:
+                        #socket서버에 맞는 dataFormat으로 변경 후 전송
+                        chData=self.chDataForm(weight)
+                        self.sendDataByTCP(chData)
+                        print("dataSend:"+chData)
+                        #검사한 무게값을 보낸 데이터에 대
+                        self.sendWeight=weight
+                    else:
+                        continue'''
+        
+        
         
     
-
-if __main__ == __name__:
-    ssid="jjingos"
-    password="wlsrn212"
-    connectId=0
-    addr="172.20.10.3"
-    port=9994
-    uartWifi = UART(1,115200)
-    uartModbus = UART(0, 4800, bits=8, parity=None, stop=1)
-    pimcsMat = PimcsMat(uartWifi,uartModbus,ssid,password,addr,port)
-
+uartWifi = UART(1,115200)
+uartLoadcell = UART(0, 4800, bits=8, parity=None, stop=1)    
+ssid="twosome2"
+password="twosome2388"
+connectId=0
+addr="192.168.219.116"
+port=9999
+serial="WS01E210001"
+pimcsMat=pimcsMat(uartWifi,uartLoadcell,ssid,password,connectId,addr,port,serial)
